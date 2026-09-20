@@ -43,8 +43,7 @@ docker compose up --build
 ```
 
 - App backend: http://localhost:8000
-- Prometheus: http://localhost:9090
-- Grafana: http://localhost:3001 (anonymous access enabled, dashboard auto-loads)
+
 
 Open `frontend/index.html` in a browser same as above — the frontend is
 static, so it isn't part of the compose stack.
