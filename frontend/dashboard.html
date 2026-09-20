@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Dashboard — HealthAI Lite</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="HealthAI Lite dashboard — live overview of AI query quality and ingested data">
+<link rel="stylesheet" href="assets/style.css">
+<script>
+// ─── Minimal inline chart renderer (no CDN dependency) ───────────────────────
+const Chart = (() => {
+  function Chart(canvas, config) {
+    this.canvas = canvas;
+    this.config = config;
+    this.data = config.data;
+    this.options = config.options || {};
+    this._draw();
+  }
+
+  Chart.prototype.destroy = function() {
+    const ctx = this.canvas.getContext("2d");
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+  };
+
+  Chart.prototype._draw = function() {
+    const canvas = this.canvas;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width  = (rect.width  || canvas.offsetWidth  || 400) * dpr;
+    canvas.height = (rect.height || canvas.offsetHeight || 200) * dpr;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+    const W = canvas.width / dpr, H = canvas.height / dpr;
+    const PAD = { top: 16, right: 16, bottom: 36, left: 44 };
+    const plotW = W - PAD.left - PAD.right;
+    const plotH = H - PAD.top  - PAD.bottom;
+    const data  = this.data.datasets[0].data;
+    const labels = this.data.labels || data.map((_, i) => i);
+    const n = data.length;
+    if (!n) return;
+    const minV = Math.min(...data) * 0.9;
+    const maxV = Math.max(...data) * 1.1 || 1;
+    const range = maxV - minV || 1;
+    const toX = i => PAD.left + (i / Math.max(n - 1, 1)) * plotW;
+    const toY = v => PAD.top  + plotH - ((v - minV) / range) * plotH;
+    // Grid
+    ctx.strokeStyle = "rgba(255,255,255,0.04)";
+    ctx.lineWidth = 1;
+    for (let t = 0; t <= 4; t++) {
+      const y = PAD.top + (t / 4) * plotH;
+      ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + plotW, y); ctx.stroke();
+      const val = maxV - (t / 4) * range;
+      ctx.fillStyle = "#475569"; ctx.font = "10px Inter,sans-serif"; ctx.textAlign = "right";
+      ctx.fillText(val.toFixed(0), PAD.left - 6, y + 4);
+    }
+    // X labels
+    ctx.fillStyle = "#475569"; ctx.font = "9px Inter,sans-serif"; ctx.textAlign = "center";
+    const step = Math.ceil(n / 8);
+    for (let i = 0; i < n; i += step) {
+      ctx.fillText(labels[i], toX(i), H - PAD.bottom + 16);
+    }
+    const type  = this.config.type;
+    const color = this.data.datasets[0].borderColor || this.data.datasets[0].backgroundColor || "#6366f1";
+    if (type === "bar") {
+      // Bar chart
+      const barW = Math.max(2, (plotW / n) * 0.65);
+      ctx.fillStyle = color;
+      data.forEach((v, i) => {
+        const x = toX(i) - barW / 2;
+        const y = toY(v);
+        const h = (PAD.top + plotH) - y;
+        ctx.beginPath();
+        ctx.roundRect(x, y, barW, h, [3, 3, 0, 0]);
+        ctx.fill();
+      });
+    } else {
+      // Line + area chart
+      const fillColor = this.data.datasets[0].backgroundColor || "rgba(99,102,241,0.08)";
+      ctx.beginPath();
+      data.forEach((v, i) => i === 0 ? ctx.moveTo(toX(i), toY(v)) : ctx.lineTo(toX(i), toY(v)));
+      ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.lineTo(toX(n - 1), PAD.top + plotH);
+      ctx.lineTo(toX(0), PAD.top + plotH);
+      ctx.closePath();
+      ctx.fillStyle = fillColor; ctx.fill();
+      // Points
+      data.forEach((v, i) => {
+        ctx.beginPath(); ctx.arc(toX(i), toY(v), 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = color; ctx.fill();
+      });
+    }
+  };
+  return Chart;
+})();
+</script>
+</head>
+<body>
+  <div class="layout" id="layout"></div>
+
+  <script src="assets/app.js"></script>
+  <script>
+    requireAuth();
+
+    document.getElementById("layout").innerHTML = `
+      ${renderNav("dashboard.html")}
+      <div class="main">
+        <div class="page-header animate-in">
+          <div class="page-title">Dashboard</div>
+          <div class="page-sub">Live overview of ingested data and AI query performance metrics</div>
+        </div>
+
+        <div class="grid grid-4 animate-in animate-in-delay-1" id="stat-cards" style="margin-bottom:1.5rem"></div>
+
+        <div class="grid grid-2 animate-in animate-in-delay-2" style="margin-bottom:1.5rem">
+          <div class="card">
+            <div class="card-title">
+              <span>📈</span> Answer Quality Trend
+              <span style="margin-left:auto;font-weight:400;text-transform:none;letter-spacing:0;font-size:0.72rem">last 15 queries</span>
+            </div>
+            <div class="chart-wrap"><canvas id="qualityChart"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-title">
+              <span>⚡</span> Response Latency
+              <span style="margin-left:auto;font-weight:400;text-transform:none;letter-spacing:0;font-size:0.72rem">milliseconds</span>
+            </div>
+            <div class="chart-wrap"><canvas id="latencyChart"></canvas></div>
+          </div>
+        </div>
+
+        <div class="card animate-in animate-in-delay-3">
+          <div class="card-title"><span>🕐</span> Recent Queries</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Question</th>
+                  <th>Quality Score</th>
+                  <th>Source</th>
+                  <th>When</th>
+                </tr>
+              </thead>
+              <tbody id="recent-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+
+    let qualityChart, latencyChart;
+
+    const chartDefaults = (yLabel, color) => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(15,23,42,0.95)',
+          borderColor: 'rgba(255,255,255,0.08)',
+          borderWidth: 1,
+          titleColor: '#94a3b8',
+          bodyColor: '#e2e8f0',
+          padding: 10,
+          cornerRadius: 8,
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: "#475569", font: { size: 10 } },
+          grid: { color: "rgba(255,255,255,0.03)" },
+          border: { color: "transparent" }
+        },
+        y: {
+          ticks: { color: "#475569", font: { size: 10 } },
+          grid: { color: "rgba(255,255,255,0.04)" },
+          border: { color: "transparent" },
+          title: { display: true, text: yLabel, color: "#475569", font: { size: 10 } }
+        },
+      },
+    });
+
+    async function load() {
+      try {
+        const s = await api("/api/dashboard/stats");
+
+        const cards = [
+          { label: "Datasets Ingested", value: s.datasets_count, icon: "📁", color: "rgba(99,102,241,0.12)", stat: null },
+          { label: "Rows Ingested", value: s.total_rows.toLocaleString(), icon: "📋", color: "rgba(6,182,212,0.12)", stat: null },
+          { label: "Queries Run", value: s.queries_count, icon: "🤖", color: "rgba(139,92,246,0.12)", stat: null },
+          { label: "Avg Quality Score", value: s.avg_quality + "%", icon: "⭐", color: `rgba(${s.avg_quality >= 75 ? '16,185,129' : s.avg_quality >= 50 ? '245,158,11' : '239,68,68'},0.12)`, stat: null },
+        ];
+
+        document.getElementById("stat-cards").innerHTML = cards.map(c => `
+          <div class="stat-card" style="--stat-bg:${c.color}">
+            <div class="stat-icon" style="background:${c.color}">${c.icon}</div>
+            <div class="stat-label">${c.label}</div>
+            <div class="stat-value">${c.value}</div>
+          </div>
+        `).join("");
+
+        const labels  = s.trend.map(t => `#${t.id}`);
+        const quality = s.trend.map(t => t.quality_score);
+        const latency = s.trend.map(t => t.latency_ms);
+
+        // Defer to next frame so canvas has computed layout dimensions
+        requestAnimationFrame(() => {
+          const qEl = document.getElementById("qualityChart");
+          const lEl = document.getElementById("latencyChart");
+          if (!qEl || !lEl) return;
+
+          if (qualityChart) qualityChart.destroy();
+          qualityChart = new Chart(qEl, {
+          type: "line",
+          data: {
+            labels,
+            datasets: [{
+              data: quality,
+              borderColor: "#6366f1",
+              backgroundColor: "rgba(99,102,241,0.08)",
+              fill: true,
+              tension: 0.4,
+              pointBackgroundColor: "#6366f1",
+              pointBorderColor: "#6366f1",
+              pointRadius: 4,
+              pointHoverRadius: 6,
+              borderWidth: 2,
+            }]
+          },
+          options: chartDefaults("Quality score"),
+          });
+
+          if (latencyChart) latencyChart.destroy();
+          latencyChart = new Chart(lEl, {
+          type: "bar",
+          data: {
+            labels,
+            datasets: [{
+              data: latency,
+              backgroundColor: "rgba(139,92,246,0.5)",
+              borderColor: "rgba(139,92,246,0.8)",
+            }]
+          },
+          options: chartDefaults("ms"),
+          });
+        }); // end requestAnimationFrame
+
+        const tbody = document.getElementById("recent-body");
+        if (s.recent_queries.length === 0) {
+          tbody.innerHTML = `
+            <tr><td colspan="4">
+              <div class="empty-state">
+                <div class="empty-state-icon">🤖</div>
+                <div class="empty-state-text">No queries yet</div>
+                <div class="empty-state-sub">Go to AI Query to ask your first question</div>
+              </div>
+            </td></tr>`;
+        } else {
+          tbody.innerHTML = s.recent_queries.map(q => {
+            const st = statusFor(q.quality_score || 0);
+            return `
+              <tr>
+                <td style="max-width:320px">
+                  <span style="color:var(--text)">${q.question.length > 70 ? q.question.slice(0, 70) + "…" : q.question}</span>
+                </td>
+                <td>
+                  <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span class="pill ${st}">${(q.quality_score || 0).toFixed(1)}%</span>
+                    <div class="progress-bar" style="width:60px">
+                      <div class="progress-fill ${st}" style="width:${q.quality_score || 0}%"></div>
+                    </div>
+                  </div>
+                </td>
+                <td>${q.mocked ? '<span class="badge-mock">MOCK</span>' : '<span class="badge-live">LIVE</span>'}</td>
+                <td style="color:var(--text-dim);white-space:nowrap">${fmtTime(q.created_at)}</td>
+              </tr>`;
+          }).join("");
+        }
+      } catch(e) {
+        console.error("Dashboard load error:", e);
+      }
+    }
+
+    load();
+    setInterval(load, 15000);
+  </script>
+</body>
+</html>

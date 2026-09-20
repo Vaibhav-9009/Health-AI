@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Data Ingestion — HealthAI Lite</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="HealthAI Lite data ingestion — upload CSV, PDF or TXT files as AI query context">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="layout" id="layout"></div>
+
+  <script src="assets/app.js"></script>
+  <script>
+    requireAuth();
+
+    document.getElementById("layout").innerHTML = `
+      ${renderNav("ingest.html")}
+      <div class="main">
+        <div class="page-header animate-in">
+          <div class="page-title">Data Ingestion</div>
+          <div class="page-sub">Upload CSV, PDF, or plain text files to use as context for AI Query evaluation</div>
+        </div>
+
+        <div class="grid grid-2 animate-in animate-in-delay-1" style="margin-bottom:1.5rem">
+          <div class="card" style="grid-column:1/-1">
+            <div class="card-title"><span>⬆️</span> Upload Dataset</div>
+            <div class="dropzone" id="dropzone">
+              <div class="dropzone-icon">📂</div>
+              <div class="dropzone-title">Drop your file here, or click to browse</div>
+              <div class="dropzone-sub">Supports CSV, PDF, TXT &nbsp;·&nbsp; Max recommended: 5 MB</div>
+              <input type="file" id="file-input" style="display:none" accept=".csv,.pdf,.txt">
+            </div>
+            <div id="upload-status-wrap"></div>
+          </div>
+        </div>
+
+        <div class="grid grid-3 animate-in animate-in-delay-2" style="margin-bottom:1.5rem">
+          <div class="stat-card" style="--stat-bg:rgba(99,102,241,0.12)">
+            <div class="stat-icon" style="background:rgba(99,102,241,0.12)">📁</div>
+            <div class="stat-label">Total Datasets</div>
+            <div class="stat-value" id="total-datasets">—</div>
+          </div>
+          <div class="stat-card" style="--stat-bg:rgba(6,182,212,0.12)">
+            <div class="stat-icon" style="background:rgba(6,182,212,0.12)">📋</div>
+            <div class="stat-label">Total Rows</div>
+            <div class="stat-value" id="total-rows">—</div>
+          </div>
+          <div class="stat-card" style="--stat-bg:rgba(139,92,246,0.12)">
+            <div class="stat-icon" style="background:rgba(139,92,246,0.12)">🗂️</div>
+            <div class="stat-label">File Types</div>
+            <div class="stat-value" id="file-types">—</div>
+          </div>
+        </div>
+
+        <div class="card animate-in animate-in-delay-3">
+          <div class="card-title"><span>🗃️</span> Ingested Datasets</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Filename</th>
+                  <th>Type</th>
+                  <th>Rows / Pages</th>
+                  <th>Columns</th>
+                  <th>Uploaded</th>
+                </tr>
+              </thead>
+              <tbody id="datasets-body">
+                <tr><td colspan="5">
+                  <div class="empty-state">
+                    <div class="empty-state-icon">📂</div>
+                    <div class="empty-state-text">No datasets uploaded yet</div>
+                    <div class="empty-state-sub">Upload a file above to get started</div>
+                  </div>
+                </td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const dropzone = document.getElementById("dropzone");
+    const fileInput = document.getElementById("file-input");
+
+    dropzone.addEventListener("click", () => fileInput.click());
+
+    dropzone.addEventListener("dragover", e => {
+      e.preventDefault();
+      dropzone.classList.add("drag-over");
+    });
+
+    dropzone.addEventListener("dragleave", () => {
+      dropzone.classList.remove("drag-over");
+    });
+
+    dropzone.addEventListener("drop", e => {
+      e.preventDefault();
+      dropzone.classList.remove("drag-over");
+      if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
+    });
+
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files.length) uploadFile(fileInput.files[0]);
+    });
+
+    function setStatus(msg, type) {
+      const wrap = document.getElementById("upload-status-wrap");
+      wrap.innerHTML = `<div class="upload-status ${type} animate-in">${msg}</div>`;
+      if (type === "success") setTimeout(() => { wrap.innerHTML = ""; }, 4000);
+    }
+
+    async function uploadFile(file) {
+      const ext = file.name.split('.').pop().toLowerCase();
+      if (!['csv','pdf','txt'].includes(ext)) {
+        setStatus("⚠ Unsupported file type. Please upload CSV, PDF, or TXT.", "error");
+        return;
+      }
+      setStatus(`<span class="spinner"></span> Uploading ${file.name}…`, "loading");
+      const form = new FormData();
+      form.append("file", file);
+      try {
+        const res = await api("/api/ingest/upload", { method: "POST", body: form });
+        setStatus(`✓ <strong>${file.name}</strong> ingested successfully (${res.row_count} rows)`, "success");
+        loadDatasets();
+        fileInput.value = "";
+      } catch (e) {
+        setStatus("✗ Upload failed: " + e.message, "error");
+      }
+    }
+
+    async function loadDatasets() {
+      try {
+        const list = await api("/api/ingest/datasets");
+
+        document.getElementById("total-datasets").textContent = list.length;
+
+        const totalRows = list.reduce((s, d) => s + (d.row_count || 0), 0);
+        document.getElementById("total-rows").textContent = totalRows.toLocaleString();
+
+        const types = [...new Set(list.map(d => d.kind.toUpperCase()))];
+        document.getElementById("file-types").textContent = types.length ? types.join(", ") : "—";
+
+        const tbody = document.getElementById("datasets-body");
+        if (!list.length) {
+          tbody.innerHTML = `<tr><td colspan="5">
+            <div class="empty-state">
+              <div class="empty-state-icon">📂</div>
+              <div class="empty-state-text">No datasets uploaded yet</div>
+              <div class="empty-state-sub">Upload a file above to get started</div>
+            </div>
+          </td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = list.map(d => {
+          let cols = [];
+          try { cols = JSON.parse(d.columns_json || "[]"); } catch(e) {}
+          const typeColors = { csv: "#10b981", pdf: "#f59e0b", text: "#6366f1", txt: "#6366f1" };
+          const color = typeColors[d.kind] || "#64748b";
+          return `
+            <tr>
+              <td>
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                  <span style="font-size:1rem">${d.kind === 'csv' ? '📊' : d.kind === 'pdf' ? '📄' : '📝'}</span>
+                  <span style="color:var(--text);font-weight:500">${d.filename}</span>
+                </div>
+              </td>
+              <td>
+                <span class="pill" style="background:${color}18;color:${color};border-color:${color}30">
+                  ${d.kind.toUpperCase()}
+                </span>
+              </td>
+              <td style="font-weight:600">${Number(d.row_count).toLocaleString()}</td>
+              <td style="color:var(--text-dim);font-size:0.78rem;max-width:180px">
+                ${cols.length ? cols.slice(0,4).join(", ") + (cols.length > 4 ? ` +${cols.length-4} more` : "") : "—"}
+              </td>
+              <td style="color:var(--text-dim);white-space:nowrap">${fmtTime(d.uploaded_at)}</td>
+            </tr>`;
+        }).join("");
+      } catch(e) {
+        console.error("loadDatasets error:", e);
+      }
+    }
+
+    loadDatasets();
+  </script>
+</body>
+</html>

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>HealthAI Lite — Sign in</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="HealthAI Lite — AI-powered health data evaluation platform">
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .particles {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .particle {
+    position: absolute;
+    width: 2px;
+    height: 2px;
+    background: var(--brand);
+    border-radius: 50%;
+    opacity: 0;
+    animation: floatUp linear infinite;
+  }
+  @keyframes floatUp {
+    0% { opacity: 0; transform: translateY(0) scale(0); }
+    10% { opacity: 0.6; }
+    90% { opacity: 0.2; }
+    100% { opacity: 0; transform: translateY(-100vh) scale(1.5); }
+  }
+</style>
+</head>
+<body>
+  <div class="particles" id="particles"></div>
+
+  <div class="login-wrap">
+    <div class="login-card animate-in">
+      <div class="login-logo">
+        <div class="login-logo-icon">🧬</div>
+        <div class="login-logo-text">
+          <h2>HealthAI Lite</h2>
+          <p>Evaluation Platform</p>
+        </div>
+      </div>
+
+      <div class="login-title">Welcome back</div>
+      <div class="login-sub">Sign in to access the AI evaluation dashboard</div>
+
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input id="username" type="text" value="admin" autofocus placeholder="Enter username">
+      </div>
+
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input id="password" type="password" value="admin123" placeholder="Enter password">
+      </div>
+
+      <button class="btn-primary" id="login-btn" style="width:100%;justify-content:center;margin-top:0.5rem" onclick="doLogin()">
+        <span id="btn-text">Sign in →</span>
+      </button>
+
+      <div class="error-msg" id="error"></div>
+
+      <div class="hint-text">
+        Demo credentials are pre-filled.<br>
+        Configured in <code style="font-size:0.7rem;color:var(--brand)">backend/.env</code>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/app.js"></script>
+  <script>
+    // Particle background
+    const container = document.getElementById("particles");
+    for (let i = 0; i < 30; i++) {
+      const p = document.createElement("div");
+      p.className = "particle";
+      p.style.left = Math.random() * 100 + "%";
+      p.style.animationDuration = (8 + Math.random() * 12) + "s";
+      p.style.animationDelay = (Math.random() * 10) + "s";
+      p.style.width = p.style.height = (1 + Math.random() * 2) + "px";
+      p.style.background = Math.random() > 0.5 ? "var(--brand)" : "var(--accent)";
+      container.appendChild(p);
+    }
+
+    async function doLogin() {
+      const username = document.getElementById("username").value.trim();
+      const password = document.getElementById("password").value;
+      const err = document.getElementById("error");
+      const btn = document.getElementById("login-btn");
+      const btnText = document.getElementById("btn-text");
+      err.textContent = "";
+
+      btn.disabled = true;
+      btnText.innerHTML = '<span class="spinner"></span> Signing in…';
+
+      try {
+        const data = await api("/api/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ username, password }),
+        });
+        setToken(data.token, data.username);
+        window.location.href = "dashboard.html";
+      } catch (e) {
+        err.innerHTML = "⚠ " + (e.message || "Login failed");
+        btn.disabled = false;
+        btnText.textContent = "Sign in →";
+      }
+    }
+
+    document.getElementById("password").addEventListener("keydown", e => {
+      if (e.key === "Enter") doLogin();
+    });
+
+    // Redirect if already logged in
+    if (getToken()) window.location.href = "dashboard.html";
+  </script>
+</body>
+</html>

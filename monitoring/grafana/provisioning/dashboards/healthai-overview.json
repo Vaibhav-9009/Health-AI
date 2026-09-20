@@ -1,0 +1,43 @@
+{
+  "title": "HealthAI Lite — Overview",
+  "uid": "healthai-lite-overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Total HTTP Requests",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "sum(http_requests_total)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Datasets Ingested",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "expr": "ingested_datasets_total" }]
+    },
+    {
+      "type": "gauge",
+      "title": "Last Query Quality Score",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "max": 100, "min": 0 }, "overrides": [] },
+      "targets": [{ "expr": "last_query_quality_score" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Query Latency (p50/p95)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "targets": [
+        { "expr": "histogram_quantile(0.5, rate(query_latency_seconds_bucket[1m]))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, rate(query_latency_seconds_bucket[1m]))", "legendFormat": "p95" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests per Path",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "targets": [{ "expr": "sum by (path) (rate(http_requests_total[1m]))", "legendFormat": "{{path}}" }]
+    }
+  ]
+}

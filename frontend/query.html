@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI Query — HealthAI Lite</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="HealthAI Lite AI Query — ask questions and get AI-evaluated responses with a detailed quality matrix">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="layout" id="layout"></div>
+
+  <script src="assets/app.js"></script>
+  <script>
+    requireAuth();
+
+    document.getElementById("layout").innerHTML = `
+      ${renderNav("query.html")}
+      <div class="main">
+        <div class="page-header animate-in">
+          <div class="page-title">AI Query</div>
+          <div class="page-sub">Ask a question — every answer is scored by the built-in evaluation engine in real-time</div>
+        </div>
+
+        <div class="card animate-in animate-in-delay-1" style="margin-bottom:1.5rem">
+          <div class="card-title"><span>⚙️</span> Query Configuration</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem" class="query-config-grid">
+            <div>
+              <label for="dataset-select">Dataset context (optional)</label>
+              <select id="dataset-select">
+                <option value="">— No dataset, general question —</option>
+              </select>
+            </div>
+            <div id="dataset-info-col" style="display:flex;align-items:flex-end">
+              <div id="dataset-info" style="font-size:0.78rem;color:var(--text-dim);padding:0.6rem 0;line-height:1.5"></div>
+            </div>
+          </div>
+          <div style="margin-bottom:1rem">
+            <label for="question">Your question</label>
+            <textarea id="question" rows="3" placeholder="e.g. What trends do the last 3 months of data show? What are the key health indicators?"></textarea>
+          </div>
+          <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+            <button class="btn-primary" id="ask-btn" onclick="ask()">
+              <span id="btn-content">🚀 Run Query</span>
+            </button>
+            <button class="btn-secondary" onclick="clearResult()">Clear</button>
+            <div id="ask-status" style="color:var(--text-dim);font-size:0.82rem"></div>
+          </div>
+        </div>
+
+        <div id="result-area"></div>
+
+        <div class="card animate-in animate-in-delay-2" style="margin-top:1.5rem">
+          <div class="card-title"><span>📋</span> Query History</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Question</th><th>Quality</th><th>Latency</th><th>Source</th><th>When</th></tr></thead>
+              <tbody id="history-body">
+                <tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-text">Loading history…</div></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Dataset select
+    async function loadDatasets() {
+      try {
+        const list = await api("/api/ingest/datasets");
+        const sel = document.getElementById("dataset-select");
+        list.forEach(d => {
+          const opt = document.createElement("option");
+          opt.value = d.id;
+          opt.dataset.kind = d.kind;
+          opt.dataset.rows = d.row_count;
+          opt.dataset.name = d.filename;
+          opt.textContent = `${d.filename} (${d.kind.toUpperCase()}, ${d.row_count} rows)`;
+          sel.appendChild(opt);
+        });
+        sel.addEventListener("change", updateDatasetInfo);
+      } catch(e) {}
+    }
+
+    function updateDatasetInfo() {
+      const sel = document.getElementById("dataset-select");
+      const info = document.getElementById("dataset-info");
+      if (!sel.value) { info.textContent = ""; return; }
+      const opt = sel.options[sel.selectedIndex];
+      info.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:0.25rem">
+          <span style="color:var(--text);font-weight:500">${opt.dataset.name}</span>
+          <span>${opt.dataset.kind.toUpperCase()} · ${Number(opt.dataset.rows).toLocaleString()} rows</span>
+        </div>`;
+    }
+
+    loadDatasets();
+
+    // History
+    async function loadHistory() {
+      try {
+        const list = await api("/api/query/history");
+        const tbody = document.getElementById("history-body");
+        if (!list.length) {
+          tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">🤖</div><div class="empty-state-text">No queries yet</div><div class="empty-state-sub">Run your first query above</div></div></td></tr>`;
+          return;
+        }
+        tbody.innerHTML = list.map(q => {
+          const st = statusFor(q.quality_score || 0);
+          return `<tr>
+            <td style="max-width:280px"><span style="color:var(--text)">${q.question.length > 65 ? q.question.slice(0,65)+"…" : q.question}</span></td>
+            <td>
+              <div style="display:flex;align-items:center;gap:0.5rem">
+                <span class="pill ${st}">${(q.quality_score||0).toFixed(1)}%</span>
+              </div>
+            </td>
+            <td style="color:var(--text-dim);white-space:nowrap">${q.latency_ms ? q.latency_ms + 'ms' : '—'}</td>
+            <td>${q.mocked ? '<span class="badge-mock">MOCK</span>' : '<span class="badge-live">LIVE</span>'}</td>
+            <td style="color:var(--text-dim);white-space:nowrap">${fmtTime(q.created_at)}</td>
+          </tr>`;
+        }).join("");
+      } catch(e) {}
+    }
+    loadHistory();
+
+    function clearResult() {
+      document.getElementById("result-area").innerHTML = "";
+      document.getElementById("question").value = "";
+      document.getElementById("ask-status").textContent = "";
+    }
+
+    async function ask() {
+      const question = document.getElementById("question").value.trim();
+      const datasetId = document.getElementById("dataset-select").value || null;
+      const btn = document.getElementById("ask-btn");
+      const btnContent = document.getElementById("btn-content");
+      const statusEl = document.getElementById("ask-status");
+      if (!question) { statusEl.textContent = "⚠ Type a question first."; return; }
+
+      btn.disabled = true;
+      btnContent.innerHTML = '<span class="spinner"></span> Running model + evaluation…';
+      statusEl.textContent = "";
+      document.getElementById("result-area").innerHTML = `
+        <div class="running-wrap animate-in">
+          <span class="spinner"></span>
+          <span>Querying AI model and computing evaluation matrix…</span>
+        </div>`;
+
+      try {
+        const res = await api("/api/query", {
+          method: "POST",
+          body: JSON.stringify({ question, dataset_id: datasetId ? Number(datasetId) : null }),
+        });
+        renderResult(res);
+        loadHistory();
+      } catch (e) {
+        statusEl.innerHTML = "⚠ " + e.message;
+        document.getElementById("result-area").innerHTML = "";
+      } finally {
+        btn.disabled = false;
+        btnContent.innerHTML = "🚀 Run Query";
+      }
+    }
+
+    function scoreColor(v) {
+      if (v >= 75) return "#10b981";
+      if (v >= 50) return "#f59e0b";
+      return "#ef4444";
+    }
+
+    function renderRing(score) {
+      const r = 46;
+      const circ = 2 * Math.PI * r;
+      const filled = (score / 100) * circ;
+      const color = scoreColor(score);
+      return `
+        <div class="ring-container" style="width:120px;height:120px">
+          <svg class="quality-ring" width="120" height="120" viewBox="0 0 120 120">
+            <circle class="ring-bg" cx="60" cy="60" r="${r}"/>
+            <circle class="ring-fill" cx="60" cy="60" r="${r}"
+              stroke="${color}"
+              stroke-dasharray="${circ}"
+              stroke-dashoffset="${circ - filled}"
+              style="filter:drop-shadow(0 0 6px ${color}88)"
+            />
+          </svg>
+          <div class="ring-center">
+            <div class="ring-score" style="color:${color}">${score.toFixed(1)}</div>
+            <div class="ring-label">QUALITY</div>
+          </div>
+        </div>`;
+    }
+
+    function renderMetricCard(name, icon, value, status, desc, delay) {
+      const color = scoreColor(value);
+      return `
+        <div class="metric-card animate-in animate-in-delay-${delay}" style="--metric-color:${color}">
+          <div class="metric-name">${icon} ${name}</div>
+          <div class="metric-score" style="color:${color}">${value.toFixed(1)}<span style="font-size:0.9rem;font-weight:500;opacity:0.6">%</span></div>
+          <div class="progress-bar">
+            <div class="progress-fill ${status}" style="width:${value}%"></div>
+          </div>
+          <div class="metric-desc" style="margin-top:0.5rem">${desc}</div>
+          <div style="margin-top:0.625rem">
+            <span class="pill ${status}">${statusIcon(value)} ${status.toUpperCase()}</span>
+          </div>
+        </div>`;
+    }
+
+    function renderResult(res) {
+      const m = res.matrix;
+
+      const metrics = [
+        { name: "Relevance", icon: "🎯", key: "relevance", desc: "Token overlap between question and answer — how well the answer addresses the question asked" },
+        { name: "Groundedness", icon: "📌", key: "groundedness", desc: "How much of the answer is supported by the supplied dataset or context" },
+        { name: "Coherence", icon: "🧩", key: "coherence", desc: "Sentence structure and readability heuristic — penalises too-short or too-long responses" },
+        { name: "Safety", icon: "🛡️", key: "safety", desc: "Keyword screen for harmful, unsafe or inappropriate content in the response" },
+      ];
+
+      document.getElementById("result-area").innerHTML = `
+        <div class="card animate-in" style="margin-bottom:1.25rem;border-color:rgba(99,102,241,0.25)">
+          <div class="section-header">
+            <div class="section-title">⚡ LLM Evaluation Matrix</div>
+            <div class="query-meta">
+              ${res.mocked ? '<span class="badge-mock">⚠ MOCK MODE</span>' : '<span class="badge-live">✓ LIVE MODEL</span>'}
+              <span class="meta-chip">⏱ ${res.latency_ms} ms</span>
+              <span class="meta-chip">🔤 ~${res.tokens_est} tokens</span>
+            </div>
+          </div>
+
+          <div class="quality-ring-wrap" style="margin-bottom:1.5rem">
+            ${renderRing(m.quality_score)}
+            <div>
+              <div style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);margin-bottom:0.35rem">Overall Quality Score</div>
+              <div style="font-size:2.8rem;font-weight:900;letter-spacing:-0.04em;color:${scoreColor(m.quality_score)};line-height:1">${m.quality_score.toFixed(1)}<span style="font-size:1.2rem;opacity:0.6;font-weight:600">%</span></div>
+              <div style="font-size:0.8rem;color:var(--text-dim);margin-top:0.4rem">Weighted composite: relevance×0.35 + groundedness×0.25 + coherence×0.25 + safety×0.15</div>
+              <div style="margin-top:0.75rem">
+                <span class="pill ${m.status.quality_score}" style="font-size:0.75rem;padding:0.25rem 0.75rem">${statusIcon(m.quality_score)} ${m.status.quality_score.toUpperCase()} QUALITY</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-4" id="metric-cards">
+            ${metrics.map((met, i) => renderMetricCard(met.name, met.icon, m[met.key], m.status[met.key], met.desc, i+1)).join("")}
+          </div>
+        </div>
+
+        <div class="card animate-in animate-in-delay-2">
+          <div class="section-header">
+            <div class="section-title">💬 Model Answer <span style="font-weight:400;text-transform:none;letter-spacing:0">(secondary output)</span></div>
+            <span class="meta-chip" style="font-size:0.7rem">Scored above ↑</span>
+          </div>
+          <div class="answer-box">${escapeHtml(res.answer)}</div>
+        </div>
+      `;
+    }
+
+    function escapeHtml(str) {
+      return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    // ctrl+enter to submit
+    document.getElementById("layout").addEventListener("keydown", e => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") ask();
+    });
+  </script>
+  <style>
+    @media (max-width: 900px) {
+      .query-config-grid { grid-template-columns: 1fr !important; }
+    }
+    @media (max-width: 700px) {
+      .grid-4 { grid-template-columns: 1fr 1fr !important; }
+      .quality-ring-wrap { flex-direction: column; gap: 1rem; }
+    }
+  </style>
+</body>
+</html>
